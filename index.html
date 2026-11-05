@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>omp panel</title>
+		<style>
+			:root {
+				--bg: #0d1017;
+				--surface: #141922;
+				--surface-2: #1b212c;
+				--border: #252c3a;
+				--fg: #dde3ee;
+				--muted: #7d8799;
+				--accent: #5aa9ff;
+				--success: #4ec9a5;
+				--warning: #e0b341;
+				--error: #f2706d;
+				--radius: 10px;
+			}
+			* { box-sizing: border-box; }
+			html, body { height: 100%; }
+			body {
+				margin: 0;
+				background: var(--bg);
+				color: var(--fg);
+				font: 14px/1.5 ui-sans-serif, -apple-system, "SF Pro Text", system-ui, sans-serif;
+				-webkit-font-smoothing: antialiased;
+			}
+			code, .mono {
+				font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+				font-size: 12.5px;
+			}
+
+			header {
+				display: flex;
+				align-items: center;
+				gap: 18px;
+				padding: 0 22px;
+				height: 56px;
+				border-bottom: 1px solid var(--border);
+				background: var(--surface);
+				position: sticky;
+				top: 0;
+				z-index: 10;
+			}
+			.brand { font-weight: 650; letter-spacing: -0.01em; margin-right: 4px; }
+			.brand span { color: var(--accent); }
+
+			nav { display: flex; gap: 2px; }
+			nav button {
+				background: none;
+				border: 0;
+				color: var(--muted);
+				padding: 7px 13px;
+				border-radius: 7px;
+				font: inherit;
+				font-weight: 500;
+				cursor: pointer;
+				transition: background 0.12s, color 0.12s;
+			}
+			nav button:hover { color: var(--fg); background: var(--surface-2); }
+			nav button.active { color: var(--fg); background: var(--surface-2); }
+
+			.spacer { flex: 1; }
+			.status { color: var(--muted); font-size: 12.5px; min-height: 18px; }
+			.status.err { color: var(--error); }
+			.status.ok { color: var(--success); }
+
+			main { padding: 22px; max-width: 1100px; margin: 0 auto; }
+			.panel { display: none; }
+			.panel.active { display: block; }
+
+			.toolbar {
+				display: flex;
+				align-items: center;
+				gap: 10px;
+				margin-bottom: 14px;
+			}
+			input[type="search"], textarea {
+				background: var(--surface);
+				border: 1px solid var(--border);
+				color: var(--fg);
+				border-radius: 8px;
+				padding: 8px 11px;
+				font: inherit;
+				outline: none;
+			}
+			input[type="search"] { flex: 1; max-width: 300px; }
+			input[type="search"]:focus, textarea:focus { border-color: var(--accent); }
+
+			button.btn {
+				background: var(--surface-2);
+				border: 1px solid var(--border);
+				color: var(--fg);
+				border-radius: 8px;
+				padding: 7px 13px;
+				font: inherit;
+				font-weight: 500;
+				cursor: pointer;
+				transition: border-color 0.12s, background 0.12s;
+			}
+			button.btn:hover { border-color: var(--accent); }
+			button.btn.danger { color: var(--error); }
+			button.btn.danger:hover { border-color: var(--error); background: rgba(242, 112, 109, 0.09); }
+			button.btn.primary { background: var(--accent); border-color: var(--accent); color: #07101d; }
+			button.btn:disabled { opacity: 0.45; cursor: default; border-color: var(--border); }
+
+			label.toggle-wrap { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12.5px; cursor: pointer; }
+
+			.card {
+				background: var(--surface);
+				border: 1px solid var(--border);
+				border-radius: var(--radius);
+				overflow: hidden;
+			}
+			.row {
+				display: flex;
+				align-items: center;
+				gap: 14px;
+				padding: 12px 16px;
+				border-bottom: 1px solid var(--border);
+			}
+			.row:last-child { border-bottom: 0; }
+			.row:hover { background: var(--surface-2); }
+			.row .grow { flex: 1; min-width: 0; }
+			.row .title { font-weight: 550; display: flex; align-items: center; gap: 9px; }
+			.row .sub {
+				color: var(--muted);
+				font-size: 12.5px;
+				margin-top: 3px;
+				white-space: nowrap;
+				overflow: hidden;
+				text-overflow: ellipsis;
+			}
+
+			.pill {
+				display: inline-block;
+				padding: 1px 8px;
+				border-radius: 999px;
+				font-size: 11px;
+				font-weight: 600;
+				letter-spacing: 0.02em;
+				border: 1px solid var(--border);
+				color: var(--muted);
+			}
+			.pill.port { color: var(--accent); border-color: rgba(90, 169, 255, 0.35); background: rgba(90, 169, 255, 0.1); }
+			.pill.on { color: var(--success); border-color: rgba(78, 201, 165, 0.35); background: rgba(78, 201, 165, 0.1); }
+			.pill.off { color: var(--muted); }
+			.pill.self { color: var(--warning); border-color: rgba(224, 179, 65, 0.35); background: rgba(224, 179, 65, 0.1); }
+
+			/* switch */
+			.sw { position: relative; width: 38px; height: 22px; flex: none; }
+			.sw input { opacity: 0; width: 0; height: 0; position: absolute; }
+			.sw span {
+				position: absolute;
+				inset: 0;
+				background: var(--surface-2);
+				border: 1px solid var(--border);
+				border-radius: 999px;
+				cursor: pointer;
+				transition: background 0.15s, border-color 0.15s;
+			}
+			.sw span::after {
+				content: "";
+				position: absolute;
+				width: 16px;
+				height: 16px;
+				left: 2px;
+				top: 2px;
+				border-radius: 50%;
+				background: var(--muted);
+				transition: transform 0.15s, background 0.15s;
+			}
+			.sw input:checked + span { background: rgba(78, 201, 165, 0.2); border-color: var(--success); }
+			.sw input:checked + span::after { transform: translateX(16px); background: var(--success); }
+
+			textarea {
+				width: 100%;
+				min-height: 62vh;
+				resize: vertical;
+				line-height: 1.65;
+				font-family: ui-monospace, "SF Mono", Menlo, monospace;
+				font-size: 13px;
+				tab-size: 2;
+			}
+			.empty { padding: 40px; text-align: center; color: var(--muted); }
+			.empty code { color: var(--fg); }
+			.hint { color: var(--muted); font-size: 12.5px; margin-top: 10px; }
+		</style>
+	</head>
+	<body>
+		<header>
+			<div class="brand">omp<span>·</span>panel</div>
+			<nav>
+				<button data-tab="ports" class="active">Ports</button>
+				<button data-tab="agents">AGENTS.md</button>
+				<button data-tab="skills">Skills</button>
+				<button data-tab="mcp">MCP</button>
+			</nav>
+			<div class="spacer"></div>
+			<div class="status" id="status"></div>
+		</header>
+
+		<main>
+			<section class="panel active" id="panel-ports">
+				<div class="toolbar">
+					<input type="search" id="port-filter" placeholder="Filter by port, process or argv…" />
+					<button class="btn" id="ports-refresh">Refresh</button>
+					<label class="toggle-wrap"><input type="checkbox" id="ports-auto" /> auto</label>
+				</div>
+				<div class="card" id="ports-list"></div>
+			</section>
+
+			<section class="panel" id="panel-agents">
+				<div class="toolbar">
+					<div class="grow mono" id="agents-path" style="color: var(--muted)"></div>
+					<button class="btn" id="agents-reload">Reload</button>
+					<button class="btn primary" id="agents-save" disabled>Save</button>
+				</div>
+				<textarea id="agents-text" spellcheck="false"></textarea>
+			</section>
+
+			<section class="panel" id="panel-skills">
+				<div class="toolbar">
+					<input type="search" id="skill-filter" placeholder="Filter skills…" />
+					<button class="btn" id="skills-refresh">Refresh</button>
+				</div>
+				<div class="card" id="skills-list"></div>
+				<div class="hint">Writes <code>skills.ignoredSkills</code> in <code>~/.omp/agent/config.yml</code>. Restart omp to apply.</div>
+			</section>
+
+			<section class="panel" id="panel-mcp">
+				<div class="toolbar">
+					<div class="grow mono" id="mcp-path" style="color: var(--muted)"></div>
+					<button class="btn" id="mcp-refresh">Refresh</button>
+				</div>
+				<div class="card" id="mcp-list"></div>
+				<div class="hint">Writes <code>disabledServers</code> in <code>~/.omp/agent/mcp.json</code>, the highest-precedence denylist.</div>
+			</section>
+		</main>
+
+		<script type="module">
+			const $ = (sel) => document.querySelector(sel);
+			const statusEl = $("#status");
+			let statusTimer;
+
+			function say(msg, kind = "") {
+				statusEl.textContent = msg;
+				statusEl.className = `status ${kind}`;
+				clearTimeout(statusTimer);
+				if (msg) statusTimer = setTimeout(() => (statusEl.textContent = ""), 3200);
+			}
+
+			async function api(path, options) {
+				const res = await fetch(path, options);
+				const text = await res.text();
+				const data = text ? JSON.parse(text) : {};
+				if (!res.ok || data.error) throw new Error(data.error ?? res.statusText);
+				return data;
+			}
+
+			const esc = (s) =>
+				String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+			// ---- tabs
+			const tabs = document.querySelectorAll("nav button");
+			const loaders = {};
+			for (const btn of tabs) {
+				btn.addEventListener("click", () => {
+					for (const b of tabs) b.classList.toggle("active", b === btn);
+					for (const p of document.querySelectorAll(".panel")) {
+						p.classList.toggle("active", p.id === `panel-${btn.dataset.tab}`);
+					}
+					loaders[btn.dataset.tab]?.();
+				});
+			}
+
+			// ---- ports
+			let portRows = [];
+			function renderPorts() {
+				const q = $("#port-filter").value.trim().toLowerCase();
+				const rows = portRows.filter(
+					(r) => !q || `${r.port} ${r.command} ${r.argv}`.toLowerCase().includes(q),
+				);
+				$("#ports-list").innerHTML = rows.length
+					? rows
+							.map(
+								(r) => `
+						<div class="row">
+							<span class="pill port">:${r.port}</span>
+							<div class="grow">
+								<div class="title">${esc(r.command)} ${r.self ? '<span class="pill self">this panel</span>' : ""}</div>
+								<div class="sub mono" title="${esc(r.argv)}">pid ${r.pid} · ${esc(r.argv || r.address)}</div>
+							</div>
+							<button class="btn danger" data-pid="${r.pid}" data-port="${r.port}" ${r.self ? "disabled" : ""}>Kill</button>
+						</div>`,
+							)
+							.join("")
+					: `<div class="empty">No listening ports match.</div>`;
+
+				for (const btn of $("#ports-list").querySelectorAll("button[data-pid]")) {
+					btn.addEventListener("click", async () => {
+						const { pid, port } = btn.dataset;
+						if (!confirm(`Kill pid ${pid} listening on :${port}?`)) return;
+						try {
+							await api("/api/ports/kill", {
+								method: "POST",
+								headers: { "content-type": "application/json" },
+								body: JSON.stringify({ pid: Number(pid) }),
+							});
+							say(`killed pid ${pid}`, "ok");
+							setTimeout(loadPorts, 400);
+						} catch (e) {
+							say(e.message, "err");
+						}
+					});
+				}
+			}
+
+			async function loadPorts() {
+				try {
+					portRows = await api("/api/ports");
+					renderPorts();
+				} catch (e) {
+					say(e.message, "err");
+				}
+			}
+			loaders.ports = loadPorts;
+			$("#ports-refresh").addEventListener("click", loadPorts);
+			$("#port-filter").addEventListener("input", renderPorts);
+			let autoTimer;
+			$("#ports-auto").addEventListener("change", (e) => {
+				clearInterval(autoTimer);
+				if (e.target.checked) autoTimer = setInterval(loadPorts, 3000);
+			});
+
+			// ---- agents.md
+			let agentsSaved = "";
+			async function loadAgents() {
+				const data = await api("/api/agents");
+				$("#agents-path").textContent = data.path;
+				$("#agents-text").value = data.content;
+				agentsSaved = data.content;
+				$("#agents-save").disabled = true;
+			}
+			loaders.agents = loadAgents;
+			$("#agents-text").addEventListener("input", () => {
+				$("#agents-save").disabled = $("#agents-text").value === agentsSaved;
+			});
+			$("#agents-reload").addEventListener("click", loadAgents);
+			$("#agents-save").addEventListener("click", async () => {
+				try {
+					await api("/api/agents", { method: "PUT", body: $("#agents-text").value });
+					agentsSaved = $("#agents-text").value;
+					$("#agents-save").disabled = true;
+					say("saved", "ok");
+				} catch (e) {
+					say(e.message, "err");
+				}
+			});
+
+			// ---- shared toggle rows (skills + mcp)
+			function toggleRow({ name, enabled, title, sub, endpoint, onDone }) {
+				return `
+					<div class="row">
+						<label class="sw">
+							<input type="checkbox" ${enabled ? "checked" : ""} data-ep="${endpoint}" data-name="${esc(name)}" />
+							<span></span>
+						</label>
+						<div class="grow">
+							<div class="title">${title}</div>
+							<div class="sub" title="${esc(sub)}">${esc(sub) || "&nbsp;"}</div>
+						</div>
+					</div>`;
+			}
+
+			function wireToggles(container, reload) {
+				for (const input of container.querySelectorAll("input[data-ep]")) {
+					input.addEventListener("change", async () => {
+						try {
+							await api(input.dataset.ep, {
+								method: "POST",
+								headers: { "content-type": "application/json" },
+								body: JSON.stringify({ name: input.dataset.name, enabled: input.checked }),
+							});
+							say(`${input.dataset.name} ${input.checked ? "enabled" : "disabled"}`, "ok");
+							reload();
+						} catch (e) {
+							input.checked = !input.checked;
+							say(e.message, "err");
+						}
+					});
+				}
+			}
+
+			// ---- skills
+			let skillRows = [];
+			function renderSkills() {
+				const q = $("#skill-filter").value.trim().toLowerCase();
+				const rows = skillRows.filter(
+					(r) => !q || `${r.name} ${r.description}`.toLowerCase().includes(q),
+				);
+				const on = skillRows.filter((r) => r.enabled).length;
+				$("#skills-list").innerHTML = rows.length
+					? rows
+							.map((r) =>
+								toggleRow({
+									name: r.name,
+									enabled: r.enabled,
+									title: `${esc(r.name)} ${r.enabled ? "" : '<span class="pill off">hidden</span>'}`,
+									sub: r.description,
+									endpoint: "/api/skills/toggle",
+								}),
+							)
+							.join("")
+					: `<div class="empty">No skills match.</div>`;
+				wireToggles($("#skills-list"), loadSkills);
+				say(`${on}/${skillRows.length} skills enabled`);
+			}
+			async function loadSkills() {
+				try {
+					skillRows = await api("/api/skills");
+					renderSkills();
+				} catch (e) {
+					say(e.message, "err");
+				}
+			}
+			loaders.skills = loadSkills;
+			$("#skills-refresh").addEventListener("click", loadSkills);
+			$("#skill-filter").addEventListener("input", renderSkills);
+
+			// ---- mcp
+			async function loadMcp() {
+				try {
+					const data = await api("/api/mcp");
+					$("#mcp-path").textContent = data.path;
+					$("#mcp-list").innerHTML = data.rows.length
+						? data.rows
+								.map((r) =>
+									toggleRow({
+										name: r.name,
+										enabled: r.enabled,
+										title: `${esc(r.name)} <span class="pill">${esc(r.transport)}</span>${r.disabledByList ? '<span class="pill off">denylisted</span>' : ""}`,
+										sub: r.target,
+										endpoint: "/api/mcp/toggle",
+									}),
+								)
+								.join("")
+						: `<div class="empty">No MCP servers configured.<br /><code>${data.exists ? "mcp.json has an empty mcpServers map" : "~/.omp/agent/mcp.json does not exist yet"}</code></div>`;
+					wireToggles($("#mcp-list"), loadMcp);
+				} catch (e) {
+					say(e.message, "err");
+				}
+			}
+			loaders.mcp = loadMcp;
+			$("#mcp-refresh").addEventListener("click", loadMcp);
+
+			loadPorts();
+		</script>
+	</body>
+</html>
