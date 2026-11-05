@@ -134,6 +134,50 @@ async function listPorts(): Promise<PortRow[]> {
 	return rows.sort((a, b) => a.port - b.port);
 }
 
+export interface KillResult {
+	alive: boolean;
+	signal: "SIGTERM" | "SIGKILL";
+	note: string;
+}
+
+/**
+ * Actually end the process: SIGTERM, wait for it to go, then SIGKILL.
+ *
+ * Liveness comes from `ps`, not `kill -0`: a killed process whose parent has
+ * not reaped it stays a zombie, and `kill -0` still succeeds on one. A zombie
+ * is dead for our purposes - it holds no port and runs no code.
+ */
+async function killProcess(pid: number): Promise<KillResult> {
+	const alive = async (): Promise<boolean> => {
+		const state = (await $`ps -p ${pid} -o state=`.nothrow().text()).trim();
+		return state.length > 0 && !state.startsWith("Z");
+	};
+
+	try {
+		process.kill(pid, "SIGTERM");
+	} catch {
+		return { alive: false, signal: "SIGTERM", note: "already gone" };
+	}
+
+	for (let i = 0; i < 12; i++) {
+		await Bun.sleep(250);
+		if (!(await alive())) return { alive: false, signal: "SIGTERM", note: "exited" };
+	}
+
+	try {
+		process.kill(pid, "SIGKILL");
+	} catch {
+		return { alive: false, signal: "SIGKILL", note: "exited" };
+	}
+	await Bun.sleep(500);
+	const stillAlive = await alive();
+	return {
+		alive: stillAlive,
+		signal: "SIGKILL",
+		note: stillAlive ? "owned by another user or unkillable" : "killed",
+	};
+}
+
 // ------------------------------------------------------------------- skills
 
 /** Pull `description:` from SKILL.md frontmatter. Uses the real parser so
@@ -290,8 +334,10 @@ const server = Bun.serve({
 				const pid = Number(body.pid);
 				if (!Number.isFinite(pid)) return json({ error: "pid required" }, 400);
 				if (pid === process.pid) return json({ error: "refusing to kill the panel itself" }, 400);
-				await $`kill ${body.force === true ? "-9" : "-15"} ${pid}`.nothrow().quiet();
-				return json({ ok: true });
+				const result = await killProcess(pid);
+				return result.alive
+					? json({ error: `pid ${pid} survived SIGKILL (${result.note})` }, 500)
+					: json({ ok: true, signal: result.signal });
 			}
 
 			if (path === "/api/agents") {

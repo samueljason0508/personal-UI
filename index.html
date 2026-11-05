@@ -301,18 +301,36 @@
 					: `<div class="empty">No listening ports match.</div>`;
 
 				for (const btn of $("#ports-list").querySelectorAll("button[data-pid]")) {
+					let armTimer;
 					btn.addEventListener("click", async () => {
-						const { pid, port } = btn.dataset;
-						if (!confirm(`Kill pid ${pid} listening on :${port}?`)) return;
+						const { pid } = btn.dataset;
+						// Two-step arm instead of confirm(): a modal blocks the page and
+						// is worse to use than a button that asks once.
+						if (btn.dataset.armed !== "1") {
+							btn.dataset.armed = "1";
+							btn.textContent = "Sure?";
+							clearTimeout(armTimer);
+							armTimer = setTimeout(() => {
+								btn.dataset.armed = "0";
+								btn.textContent = "Kill";
+							}, 3000);
+							return;
+						}
+						clearTimeout(armTimer);
+						btn.disabled = true;
+						btn.textContent = "Killing…";
 						try {
-							await api("/api/ports/kill", {
+							const res = await api("/api/ports/kill", {
 								method: "POST",
 								headers: { "content-type": "application/json" },
 								body: JSON.stringify({ pid: Number(pid) }),
 							});
-							say(`killed pid ${pid}`, "ok");
-							setTimeout(loadPorts, 400);
+							say(`pid ${pid} killed (${res.signal})`, "ok");
+							loadPorts();
 						} catch (e) {
+							btn.disabled = false;
+							btn.dataset.armed = "0";
+							btn.textContent = "Kill";
 							say(e.message, "err");
 						}
 					});
