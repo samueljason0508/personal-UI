@@ -3,8 +3,8 @@
 import { $ } from "bun";
 import { Document, parse, parseDocument } from "yaml";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { readdir, readFile, writeFile, stat } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 
 const HOME = homedir();
 const CONFIG_YML = join(HOME, ".omp/agent/config.yml");
@@ -34,12 +34,17 @@ export interface McpRow {
 	target: string;
 	enabled: boolean;
 	disabledByList: boolean;
+	/** Label of the highest-precedence config that defines this server. */
+	source: string;
+	/** Lower-precedence configs defining the same name; omp ignores these. */
+	shadowedBy: string[];
 }
 
 export interface McpListing {
 	rows: McpRow[];
-	exists: boolean;
-	path: string;
+	/** Where `disabledServers` is written, which may not exist yet. */
+	denylistPath: string;
+	sources: { label: string; path: string; count: number }[];
 }
 
 /** Used by every route, so the content-type stays in one place. */
@@ -175,50 +180,92 @@ async function setSkillEnabled(name: string, enabled: boolean): Promise<void> {
 
 // ---------------------------------------------------------------------- mcp
 
-async function readMcpConfig(): Promise<Record<string, unknown>> {
-	const text = await readFile(MCP_JSON, "utf8").catch(() => "");
+/**
+ * Every config omp discovers MCP servers from, in omp's precedence order.
+ * The first definition of a name wins; later ones are shadowed, not merged.
+ * `key` is the property holding the server map in that file's shape.
+ */
+const MCP_SOURCES: { label: string; path: string; key: string; toml?: true }[] = [
+	{ label: "omp", path: join(HOME, ".omp/agent/mcp.json"), key: "mcpServers" },
+	{ label: "omp", path: join(HOME, ".omp/agent/.mcp.json"), key: "mcpServers" },
+	{ label: "claude", path: join(HOME, ".claude.json"), key: "mcpServers" },
+	{ label: "claude", path: join(HOME, ".claude/mcp.json"), key: "mcpServers" },
+	{ label: "codex", path: join(HOME, ".codex/config.toml"), key: "mcp_servers", toml: true },
+	{ label: "gemini", path: join(HOME, ".gemini/settings.json"), key: "mcpServers" },
+	{ label: "cursor", path: join(HOME, ".cursor/mcp.json"), key: "mcpServers" },
+	{ label: "opencode", path: join(HOME, ".config/opencode/opencode.json"), key: "mcp" },
+];
+
+async function readConfigFile(path: string, toml?: true): Promise<Record<string, unknown>> {
+	const text = await readFile(path, "utf8").catch(() => "");
 	if (!text.trim()) return {};
 	try {
-		return asRecord(JSON.parse(text)) ?? {};
+		return asRecord(toml ? Bun.TOML.parse(text) : JSON.parse(text)) ?? {};
 	} catch {
 		return {};
 	}
 }
 
+/** The denylist omp applies across every source, in omp's own config. */
+async function readDenylist(): Promise<string[]> {
+	const cfg = await readConfigFile(MCP_JSON);
+	return asStringList(cfg.disabledServers);
+}
+
 async function listMcp(): Promise<McpListing> {
-	const cfg = await readMcpConfig();
-	const exists = await stat(MCP_JSON).then(
-		() => true,
-		() => false,
-	);
-	const servers = asRecord(cfg.mcpServers) ?? {};
-	const disabled = new Set(asStringList(cfg.disabledServers));
+	const disabled = new Set(await readDenylist());
+	const byName = new Map<string, McpRow>();
+	const sources: { label: string; path: string; count: number }[] = [];
 
-	const rows = Object.entries(servers).map(([name, value]): McpRow => {
-		const entry = asRecord(value) ?? {};
-		const url = typeof entry.url === "string" ? entry.url : undefined;
-		const command = typeof entry.command === "string" ? entry.command : undefined;
-		const target = url ?? [command, ...asStringList(entry.args)].filter(Boolean).join(" ");
-		return {
-			name,
-			transport: typeof entry.type === "string" ? entry.type : url ? "http" : "stdio",
-			target: target || "-",
-			// disabledServers is the highest-precedence denylist; the entry's own
-			// `enabled: false` is the weaker per-entry switch.
-			enabled: !disabled.has(name) && entry.enabled !== false,
-			disabledByList: disabled.has(name),
-		};
-	});
+	for (const src of MCP_SOURCES) {
+		const cfg = await readConfigFile(src.path, src.toml);
+		const servers = asRecord(cfg[src.key]);
+		if (!servers) continue;
+		const names = Object.keys(servers);
+		if (names.length === 0) continue;
+		sources.push({ label: src.label, path: src.path, count: names.length });
 
-	return { rows: rows.sort((a, b) => a.name.localeCompare(b.name)), exists, path: MCP_JSON };
+		for (const [name, value] of Object.entries(servers)) {
+			// First definition wins; record later ones as shadowed instead.
+			const existing = byName.get(name);
+			if (existing) {
+				if (!existing.shadowedBy.includes(src.label)) existing.shadowedBy.push(src.label);
+				continue;
+			}
+			const entry = asRecord(value) ?? {};
+			const url = typeof entry.url === "string" ? entry.url : undefined;
+			const command = typeof entry.command === "string" ? entry.command : undefined;
+			const target = url ?? [command, ...asStringList(entry.args)].filter(Boolean).join(" ");
+			byName.set(name, {
+				name,
+				transport: typeof entry.type === "string" ? entry.type : url ? "http" : "stdio",
+				target: target || "-",
+				// disabledServers is the cross-source denylist; the entry's own
+				// `enabled: false` is the weaker per-entry switch.
+				enabled: !disabled.has(name) && entry.enabled !== false,
+				disabledByList: disabled.has(name),
+				source: src.label,
+				shadowedBy: [],
+			});
+		}
+	}
+
+	return {
+		rows: [...byName.values()].sort((a, b) => a.name.localeCompare(b.name)),
+		denylistPath: MCP_JSON,
+		sources,
+	};
 }
 
 async function setMcpEnabled(name: string, enabled: boolean): Promise<void> {
-	const cfg = await readMcpConfig();
+	// Writes omp's own mcp.json even when the server is defined elsewhere:
+	// disabledServers is a cross-source denylist keyed by name.
+	const cfg = await readConfigFile(MCP_JSON);
 	const disabled = new Set(asStringList(cfg.disabledServers));
 	if (enabled) disabled.delete(name);
 	else disabled.add(name);
 	cfg.disabledServers = [...disabled].sort();
+	await mkdir(dirname(MCP_JSON), { recursive: true });
 	await writeFile(MCP_JSON, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
 }
 
