@@ -73,12 +73,29 @@ function configStringList(doc: Document, section: string, key: string): string[]
 
 // ------------------------------------------------------------------- ports
 
+/** pid -> value, from `ps -A -o pid=,<field>=`. The value may contain spaces,
+ *  so only the leading pid is split off. */
+async function psField(field: "comm" | "command"): Promise<Map<number, string>> {
+	const out = await $`ps -A -o pid=,${field}=`.nothrow().text();
+	const byPid = new Map<number, string>();
+	for (const line of out.split("\n")) {
+		const match = line.trim().match(/^(\d+)\s+(.*)$/);
+		if (match) byPid.set(Number(match[1]), match[2]!.trim());
+	}
+	return byPid;
+}
+
 /**
  * Listening TCP sockets only: `-sTCP:LISTEN` keeps the list to servers rather
  * than every transient client connection.
  */
 async function listPorts(): Promise<PortRow[]> {
-	const out = await $`lsof -nP -iTCP -sTCP:LISTEN`.nothrow().text();
+	// Two batched ps calls rather than two per listener.
+	const [out, comms, argvs] = await Promise.all([
+		$`lsof -nP -iTCP -sTCP:LISTEN`.nothrow().text(),
+		psField("comm"),
+		psField("command"),
+	]);
 	const seen = new Set<string>();
 	const rows: PortRow[] = [];
 
@@ -95,12 +112,17 @@ async function listPorts(): Promise<PortRow[]> {
 		if (seen.has(key)) continue;
 		seen.add(key);
 
+		// lsof truncates COMMAND to 9 chars and escapes spaces as \x20, so prefer
+		// ps `comm` (the executable's basename) and fall back to the lsof column.
+		const comm = comms.get(pid);
+		const command = comm?.split("/").pop() || (f[0] ?? "?").replace(/\\x20/g, " ");
+
 		rows.push({
 			port,
 			pid,
-			command: f[0] ?? "?",
+			command,
 			address,
-			argv: (await $`ps -p ${pid} -o command=`.nothrow().text()).trim(),
+			argv: argvs.get(pid) ?? "",
 			self: pid === process.pid,
 		});
 	}

@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Start the omp control panel and open it in Orca.
+#   omp-panel          start (or focus) the panel
+#   omp-panel stop     stop it
+set -euo pipefail
+
+DIR="$HOME/git/personal-UI"
+PORT="${OMP_PANEL_PORT:-8777}"
+LOG="${TMPDIR:-/tmp}/omp-panel.log"
+URL="http://127.0.0.1:$PORT"
+
+health() { curl -fsS --max-time 2 "$URL/api/ports" >/dev/null 2>&1; }
+
+if [[ "${1:-}" == "stop" ]]; then
+  # Resolve by listening port: the process argv is just `bun server.ts`, which
+  # no pkill pattern on the script path can match.
+  pids=$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null || true)
+  if [[ -z "$pids" ]]; then
+    echo "omp-panel not running"
+  else
+    kill $pids && echo "omp-panel stopped"
+  fi
+  exit 0
+fi
+
+if ! health; then
+  echo "omp-panel: starting on $URL (log: $LOG)" >&2
+  OMP_PANEL_PORT="$PORT" nohup bun "$DIR/server.ts" >"$LOG" 2>&1 &
+  disown
+  for _ in $(seq 1 40); do
+    health && break
+    sleep 0.25
+  done
+  if ! health; then
+    echo "omp-panel: failed to start; see $LOG" >&2
+    exit 1
+  fi
+fi
+
+exec orca tab create --url "$URL"
