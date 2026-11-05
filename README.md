@@ -29,11 +29,18 @@ omp-panel stop         # stop
 | Ports | Every listening TCP socket with pid and full argv | `kill` (SIGTERM) |
 | AGENTS.md | `~/.agents/AGENTS.md` | the file itself |
 | Skills | Every skill in `skills.customDirectories` | `skills.ignoredSkills` in `~/.omp/agent/config.yml` |
-| MCP | Servers in `~/.omp/agent/mcp.json` | `disabledServers` in that file |
+| MCP | Servers from every config omp discovers | `disabledServers` in `~/.omp/agent/mcp.json` |
 
 Skill and MCP toggles are the mechanisms omp already reads, not a parallel
 registry: `ignoredSkills` hides a skill from discovery, and `disabledServers` is
 omp's highest-precedence MCP denylist. Restart omp for changes to take effect.
+
+MCP discovery spans omp, Claude Code (`~/.claude.json`), Codex
+(`~/.codex/config.toml`, parsed with `Bun.TOML`), Gemini CLI, Cursor, and
+OpenCode. omp resolves duplicate names by precedence rather than merging, so a
+server defined in several files shows its winning source and a `shadows N`
+badge. Toggling always writes omp's own `mcp.json`, since `disabledServers`
+applies across sources by name.
 
 Config writes go through `yaml`'s `parseDocument`, so comments and key order in
 `config.yml` survive a toggle.
