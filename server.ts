@@ -2,14 +2,15 @@
 // Binds loopback only. Every mutation writes the same files omp itself reads.
 import { $ } from "bun";
 import { Document, parse, parseDocument } from "yaml";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 
 const HOME = homedir();
 const CONFIG_YML = join(HOME, ".omp/agent/config.yml");
 const MCP_JSON = join(HOME, ".omp/agent/mcp.json");
 const AGENTS_MD = join(HOME, ".agents/AGENTS.md");
+const GIT_DIR = process.env.OMP_PANEL_GIT_DIR ?? join(HOME, "git");
 const PORT = Number(process.env.OMP_PANEL_PORT ?? 8777);
 
 export interface PortRow {
@@ -21,10 +22,11 @@ export interface PortRow {
 	self: boolean;
 }
 
-export interface AppRow {
+export interface ProjectRow {
 	name: string;
-	bundleId: string;
 	path: string;
+	/** Package manager picked from the lockfile: `bun run dev`, not just `dev`. */
+	command: string;
 	running: boolean;
 }
 
@@ -185,104 +187,141 @@ async function killProcess(pid: number): Promise<KillResult> {
 	};
 }
 
-// -------------------------------------------------------------------- apps
+// ----------------------------------------------------------------- projects
 
-/** Top-level folders Finder treats as app sources. Scanned one level deep,
- *  plus one more level into subfolders (e.g. `Utilities`) so grouped apps
- *  show up without walking into any app's own bundle contents. */
-const APP_DIRS = [
-	"/Applications",
-	"/System/Applications",
-	"/System/Applications/Utilities",
-	join(HOME, "Applications"),
-];
+const PROJECT_LABEL_PREFIX = "dev.omp.panel.project.";
 
-/** Every .app bundle directly under `dir`, or one level inside a non-bundle
- *  subfolder of it (covers things like an `/Applications/Utilities` or a
- *  vendor folder holding several apps). */
-async function findApps(dir: string): Promise<string[]> {
-	const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
-	const found: string[] = [];
-	for (const entry of entries) {
-		if (!entry.isDirectory()) continue;
-		if (entry.name.endsWith(".app")) {
-			found.push(join(dir, entry.name));
-			continue;
-		}
-		const nested = await readdir(join(dir, entry.name), { withFileTypes: true }).catch(() => []);
-		for (const n of nested) {
-			if (n.isDirectory() && n.name.endsWith(".app")) found.push(join(dir, entry.name, n.name));
-		}
-	}
-	return found;
+type PackageManager = "bun" | "pnpm" | "yarn" | "npm";
+
+interface ProjectInfo {
+	name: string;
+	path: string;
+	script: "dev" | "start";
+	pm: PackageManager;
 }
 
-/** CFBundleIdentifier of a .app bundle, or undefined if it has none. */
-async function appBundleId(appPath: string): Promise<string | undefined> {
-	const out = await $`/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" ${join(appPath, "Contents/Info.plist")}`
-		.nothrow()
-		.text();
-	const id = out.trim();
-	return id && !id.includes("Does Not Exist") ? id : undefined;
+/** LaunchAgent-label-safe slug for a project's directory name. */
+function slug(name: string): string {
+	return name.replace(/[^a-zA-Z0-9]+/g, "-").toLowerCase();
+}
+
+/** Resolve a binary a backgrounded LaunchAgent's bare PATH
+ *  (`/usr/bin:/bin:/usr/sbin:/sbin`) would not find, same reasoning as the
+ *  `omp-panel.app` launcher's own bun lookup. */
+async function resolveBin(name: string): Promise<string | undefined> {
+	for (const dir of ["/opt/homebrew/bin", "/usr/local/bin"]) {
+		if (await stat(join(dir, name)).catch(() => null)) return join(dir, name);
+	}
+	const out = await $`command -v ${name}`.nothrow().text();
+	return out.trim() || undefined;
+}
+
+/** Picks a package manager from the lockfile actually checked in, so
+ *  starting a project does not silently install with the wrong one. */
+async function detectPackageManager(dir: string): Promise<PackageManager> {
+	if (await stat(join(dir, "bun.lock")).catch(() => null)) return "bun";
+	if (await stat(join(dir, "bun.lockb")).catch(() => null)) return "bun";
+	if (await stat(join(dir, "pnpm-lock.yaml")).catch(() => null)) return "pnpm";
+	if (await stat(join(dir, "yarn.lock")).catch(() => null)) return "yarn";
+	return "npm";
+}
+
+/** Every `~/git` entry that is a git repo with a `dev` or `start` script -
+ *  the two conventional names for "run this locally". */
+async function findRunnableProjects(): Promise<ProjectInfo[]> {
+	const entries = await readdir(GIT_DIR, { withFileTypes: true }).catch(() => []);
+	const rows = await Promise.all(
+		entries
+			.filter((e) => e.isDirectory())
+			.map(async (entry): Promise<ProjectInfo | null> => {
+				const path = join(GIT_DIR, entry.name);
+				const isRepo = await stat(join(path, ".git")).catch(() => null);
+				if (!isRepo) return null;
+				const raw = await readFile(join(path, "package.json"), "utf8").catch(() => null);
+				if (!raw) return null;
+				const scripts = asRecord(asRecord(JSON.parse(raw))?.scripts);
+				const script = scripts?.dev ? "dev" : scripts?.start ? "start" : undefined;
+				if (!script) return null;
+				return { name: entry.name, path, script, pm: await detectPackageManager(path) };
+			}),
+	);
+	return rows.filter((r): r is ProjectInfo => r !== null).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Every running process's working directory, from `lsof -d cwd`. A
+ *  project's dev server is matched on cwd (where `npm run dev` et al.
+ *  actually execute) rather than argv, since the bundler binary itself
+ *  rarely has the project path in it. */
+async function listCwds(): Promise<string[]> {
+	const out = await $`lsof -a -d cwd -n -P`.nothrow().text();
+	const dirs: string[] = [];
+	for (const line of out.split("\n").slice(1)) {
+		const f = line.trim().split(/\s+/);
+		if (f.length < 9) continue;
+		dirs.push(f.slice(8).join(" "));
+	}
+	return dirs;
+}
+
+async function listApps(): Promise<ProjectRow[]> {
+	const [projects, cwds] = await Promise.all([findRunnableProjects(), listCwds()]);
+	return projects.map((p) => ({
+		name: p.name,
+		path: p.path,
+		command: `${p.pm} run ${p.script}`,
+		running: cwds.some((c) => c === p.path || c.startsWith(`${p.path}/`)),
+	}));
 }
 
 /**
- * Full command line of every running process. Matching app liveness against
- * this (rather than `tell application "System Events" to get ... processes`)
- * is deliberate: Apple Events need per-target-app Automation (TCC)
- * permission, which a backgrounded LaunchAgent has no way to be granted -
- * the request has nowhere to show its consent prompt, so it hangs instead
- * of failing. Plain `ps` needs no permission at all.
+ * Start and stop both go through a dedicated LaunchAgent per project, the
+ * same mechanism the panel's own server uses for itself: a plain
+ * backgrounded child would share this server's own job and die the next
+ * time it restarts, and launchd's job-level stop also takes the whole
+ * process tree with it, so a bundler's child processes do not leak behind
+ * the way a bare `kill` on just the top pid would.
  */
-async function listRunningCommands(): Promise<string[]> {
-	const out = await $`ps -A -o command=`.nothrow().text();
-	return out.split("\n");
-}
+async function setAppRunning(name: string, running: boolean): Promise<void> {
+	const label = PROJECT_LABEL_PREFIX + slug(name);
+	const domain = `gui/${process.getuid!()}`;
+	await $`launchctl bootout ${domain}/${label}`.nothrow();
+	if (!running) return;
 
-/** True if some running process's executable lives inside this bundle. */
-function isAppRunning(appPath: string, commands: string[]): boolean {
-	const prefix = `${appPath}/Contents/MacOS/`;
-	return commands.some((c) => c.startsWith(prefix));
-}
+	const project = (await findRunnableProjects()).find((p) => p.name === name);
+	if (!project) throw new Error(`unknown project ${name}`);
+	const bin = await resolveBin(project.pm);
+	if (!bin) throw new Error(`${project.pm} not found (checked /opt/homebrew/bin, /usr/local/bin, PATH)`);
 
-async function listApps(): Promise<AppRow[]> {
-	const [paths, commands] = await Promise.all([
-		Promise.all(APP_DIRS.map(findApps)).then((lists) => lists.flat()),
-		listRunningCommands(),
-	]);
-	const withIds = await Promise.all(paths.map(async (path) => ({ path, bundleId: await appBundleId(path) })));
-
-	const seen = new Set<string>();
-	const rows: AppRow[] = [];
-	for (const { path, bundleId } of withIds) {
-		if (!bundleId || seen.has(bundleId)) continue;
-		seen.add(bundleId);
-		rows.push({
-			name: path.split("/").pop()!.replace(/\.app$/, ""),
-			bundleId,
-			path,
-			running: isAppRunning(path, commands),
-		});
-	}
-	return rows.sort((a, b) => a.name.localeCompare(b.name));
-}
-
-/**
- * Open launches the app normally (`open -b`). Quit goes through
- * NSRunningApplication (via a one-line JXA script), not an AppleEvent
- * ("tell application ... to quit"): that still runs the app's normal
- * termination sequence - unsaved-document prompts included - but it's a
- * direct in-process Cocoa call rather than a cross-app Apple Event, so it
- * needs no Automation (TCC) permission either.
- */
-async function setAppRunning(bundleId: string, running: boolean): Promise<void> {
-	if (running) {
-		const result = await $`open -b ${bundleId}`.nothrow();
-		if (result.exitCode !== 0) throw new Error(`could not open ${bundleId}`);
-		return;
-	}
-	const script = `ObjC.import("AppKit"); var apps = $.NSRunningApplication.runningApplicationsWithBundleIdentifier(${JSON.stringify(bundleId)}); var n = apps.count; for (var i = 0; i < n; i++) { apps.objectAtIndex(i).terminate; } n;`;
-	await $`osascript -l JavaScript -e ${script}`.nothrow();
+	const plistPath = join(HOME, "Library/LaunchAgents", `${label}.plist`);
+	const log = join(tmpdir(), `omp-panel-project-${slug(name)}.log`);
+	await mkdir(dirname(plistPath), { recursive: true });
+	await writeFile(
+		plistPath,
+		`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key><string>${label}</string>
+	<key>ProgramArguments</key>
+	<array><string>${bin}</string><string>run</string><string>${project.script}</string></array>
+	<key>WorkingDirectory</key><string>${project.path}</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+	<key>RunAtLoad</key><true/>
+	<key>KeepAlive</key><false/>
+	<key>ProcessType</key><string>Interactive</string>
+	<key>StandardOutPath</key><string>${log}</string>
+	<key>StandardErrorPath</key><string>${log}</string>
+</dict>
+</plist>
+`,
+		"utf8",
+	);
+	const result = await $`launchctl bootstrap ${domain} ${plistPath}`.nothrow();
+	if (result.exitCode !== 0) throw new Error(`failed to start ${name}: see ${log}`);
 }
 
 // ------------------------------------------------------------------- skills
