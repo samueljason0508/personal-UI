@@ -52,6 +52,8 @@ if ! health; then
 		<string>$BUN</string>
 		<string>$DIR/server.ts</string>
 	</array>
+	<key>WorkingDirectory</key>
+	<string>$DIR</string>
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>OMP_PANEL_PORT</key>
