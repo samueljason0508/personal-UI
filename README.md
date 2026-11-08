@@ -1,7 +1,7 @@
 # personal-UI
 
 A local control panel for the things that are otherwise scattered across `lsof`
-output, `~/git`, and dotfiles: listening ports, your local dev projects, the
+output, Launch Services, and dotfiles: listening ports, installed apps, the
 global `AGENTS.md`, omp skills, and MCP servers.
 
 Bun server + one HTML file. No build step, no framework. Binds `127.0.0.1` only.
@@ -37,7 +37,7 @@ omp-panel stop         # stop
 | Tab | Shows | Writes |
 |---|---|---|
 | Ports | Every listening TCP socket with pid and full argv | `kill` (SIGTERM, then SIGKILL) |
-| Apps | Every `~/git` repo with a `dev` or `start` script in `package.json`, with live running state | starts/stops its dev server |
+| Apps | Every `.app` in `/Applications`, `/System/Applications` (+ `Utilities`), and `~/Applications`, with live running state | `open -b` / app termination |
 | AGENTS.md | `~/.agents/AGENTS.md` | the file itself |
 | Skills | Every skill in `skills.customDirectories` | `skills.ignoredSkills` in `~/.omp/agent/config.yml` |
 | MCP | Servers from every config omp discovers | `disabledServers` in `~/.omp/agent/mcp.json` |
@@ -62,14 +62,11 @@ Config writes go through `yaml`'s `parseDocument`, so comments and key order in
 - The Ports tab lists listeners only (`lsof -sTCP:LISTEN`). A stale `CLOSE_WAIT`
   client socket can still block a `bind()` without appearing here.
 - Killing (Ports) is SIGTERM, then SIGKILL if it's still alive after 3s.
-- Stopping a project (Apps) stops its whole process tree (launchd job-level
-  kill), so a bundler's child processes do not leak behind.
-- Running state comes from matching `lsof -d cwd` against each project's
-  path, not the process argv: the bundler binary rarely has the project
-  path in it, but `npm run dev` et al. always execute with cwd set there.
-- Starting a project picks its package manager from the lockfile checked
-  in (`bun.lock(b)`, `pnpm-lock.yaml`, `yarn.lock`, else `npm`) and runs it
-  as its own `~/Library/LaunchAgents` job, same reasoning as the panel's
-  own server: a plain background child would die with this server on its
-  next restart.
-- `OMP_PANEL_GIT_DIR` overrides the projects root (default `~/git`).
+- Quitting an app (Apps) asks it to terminate normally - unsaved-document
+  prompts included - rather than signalling it. It does not force-quit on a
+  timeout, so an app blocked on its own dialog will still show as running.
+- Running state comes from matching `ps` output against each app's
+  `Contents/MacOS/<executable>`, not `tell application "System Events"`:
+  Apple Events need per-app Automation (TCC) permission, which a
+  LaunchAgent has no way to be granted - the consent prompt has nowhere to
+  show itself, so the call hangs instead of failing.

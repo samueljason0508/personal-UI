@@ -216,7 +216,7 @@
 
 			<section class="panel" id="panel-apps">
 				<div class="toolbar">
-					<input type="search" id="app-filter" placeholder="Filter projects…" />
+					<input type="search" id="app-filter" placeholder="Filter apps…" />
 					<button class="btn" id="apps-refresh">Refresh</button>
 				</div>
 				<div class="card" id="apps-list"></div>
@@ -432,17 +432,17 @@
 					? rows
 							.map((r) =>
 								toggleRow({
-									name: r.name,
+									name: r.bundleId,
 									enabled: r.running,
 									title: `${esc(r.name)} ${r.running ? '<span class="pill on">running</span>' : ""}`,
-									sub: `${r.path} · ${r.command}`,
+									sub: r.path,
 									endpoint: "/api/apps/toggle",
 								}),
 							)
 							.join("")
-					: `<div class="empty">No runnable projects found in ~/git.</div>`;
+					: `<div class="empty">No apps found.</div>`;
 				wireToggles($("#apps-list"), loadApps);
-				say(`${on}/${appRows.length} projects running`);
+				say(`${on}/${appRows.length} apps running`);
 			}
 			async function loadApps() {
 				try {
