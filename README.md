@@ -4,26 +4,33 @@ A local control panel for the things that are otherwise scattered across `lsof`
 output, `~/git`, and dotfiles: listening ports, your local dev projects, the
 global `AGENTS.md`, omp skills, and MCP servers.
 
-Bun server + one HTML file. No build step, no framework. Binds `127.0.0.1` only.
+Bun server + one HTML file for the panel itself. No build step, no
+framework there. The desktop shell (`personalui.app`) is a ~60-line
+Swift/AppKit/WebKit native wrapper - not Electron, no bundled runtime -
+compiled once with `swiftc` (ships with Xcode Command Line Tools).
 
 ## Run
 
-**omp-panel.app** - lives in this repo but installs to `/Applications`
-like any other app, so Spotlight/Launchpad find it:
+**personalui.app** - lives in this repo but installs to `/Applications`
+like any other app, so Spotlight/Launchpad/Dock find it by name and icon:
 
 ```sh
-cp -R omp-panel.app /Applications/
+swiftc -O personalui.app/Contents/Resources/PersonalUI.swift \
+  -o personalui.app/Contents/MacOS/personalui \
+  -framework Cocoa -framework WebKit   # only needed after editing the Swift source
+cp -R personalui.app /Applications/
 ```
 
-Double-click it from there (or drag it to the Dock). It expects the repo
-at `~/git/personal-UI` (same convention as the CLI launcher below) and
-starts the server if it isn't already running, then opens the panel in
-its own chrome-less browser window (`--app=` mode: no tabs, no address
-bar), so it behaves like a native app with no terminal involved. The
-server itself runs as a `~/Library/LaunchAgents` LaunchAgent, independent
-of the app window's own lifecycle, so it also comes back up on login -
-later launches just open a window against an already-running server.
-Re-run the `cp -R` after editing the bundle to update the installed copy.
+Double-click it from there (or drag it to the Dock). It's a real native
+window - a `WKWebView` with no tabs or address bar, not a browser window -
+so it gets its own Dock tile with this app's icon and name instead of
+showing up as whatever browser would otherwise host the page. It expects
+the repo at `~/git/personal-UI` (same convention as the CLI launcher
+below) and starts the server if it isn't already running. The server
+itself runs as a `~/Library/LaunchAgents` LaunchAgent, independent of the
+window's own lifecycle, so it also comes back up on login - later
+launches just open a window against an already-running server, and
+quitting the window leaves the server running in the background.
 
 For a terminal workflow instead:
 

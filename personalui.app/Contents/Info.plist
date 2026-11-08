@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>omp panel</string>
+	<string>personalui</string>
 	<key>CFBundleDisplayName</key>
-	<string>omp panel</string>
+	<string>personalui</string>
 	<key>CFBundleIdentifier</key>
-	<string>dev.omp.panel</string>
+	<string>dev.omp.personalui</string>
 	<key>CFBundleVersion</key>
 	<string>1.0</string>
 	<key>CFBundleShortVersionString</key>
@@ -15,7 +15,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleExecutable</key>
-	<string>omp-panel</string>
+	<string>personalui</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon.icns</string>
 	<key>LSMinimumSystemVersion</key>
