@@ -390,7 +390,7 @@
 			});
 
 			// ---- shared toggle rows (apps + skills + mcp)
-			function toggleRow({ name, enabled, title, sub, endpoint, onDone }) {
+			function toggleRow({ name, enabled, title, sub, endpoint, deleteEndpoint }) {
 				return `
 					<div class="row">
 						<label class="sw">
@@ -401,6 +401,7 @@
 							<div class="title">${title}</div>
 							<div class="sub" title="${esc(sub)}">${esc(sub) || "&nbsp;"}</div>
 						</div>
+						${deleteEndpoint ? `<button class="btn danger" data-del-ep="${deleteEndpoint}" data-del-name="${esc(name)}">Delete</button>` : ""}
 					</div>`;
 			}
 
@@ -417,6 +418,45 @@
 							reload();
 						} catch (e) {
 							input.checked = !input.checked;
+							say(e.message, "err");
+						}
+					});
+				}
+			}
+
+			// Two-step arm instead of confirm(): a modal blocks the page and is
+			// worse to use than a button that asks once, same pattern as the
+			// Ports tab's Kill button.
+			function wireDeletes(container, reload) {
+				for (const btn of container.querySelectorAll("button[data-del-ep]")) {
+					let armTimer;
+					btn.addEventListener("click", async () => {
+						const { delEp, delName } = btn.dataset;
+						if (btn.dataset.armed !== "1") {
+							btn.dataset.armed = "1";
+							btn.textContent = "Sure?";
+							clearTimeout(armTimer);
+							armTimer = setTimeout(() => {
+								btn.dataset.armed = "0";
+								btn.textContent = "Delete";
+							}, 3000);
+							return;
+						}
+						clearTimeout(armTimer);
+						btn.disabled = true;
+						btn.textContent = "Deleting…";
+						try {
+							await api(delEp, {
+								method: "POST",
+								headers: { "content-type": "application/json" },
+								body: JSON.stringify({ name: delName }),
+							});
+							say(`${delName} deleted`, "ok");
+							reload();
+						} catch (e) {
+							btn.disabled = false;
+							btn.dataset.armed = "0";
+							btn.textContent = "Delete";
 							say(e.message, "err");
 						}
 					});
@@ -479,11 +519,13 @@
 									title: `${esc(r.name)} ${r.enabled ? "" : '<span class="pill off">hidden</span>'}`,
 									sub: r.description,
 									endpoint: "/api/skills/toggle",
+									deleteEndpoint: "/api/skills/delete",
 								}),
 							)
 							.join("")
 					: `<div class="empty">No skills match.</div>`;
 				wireToggles($("#skills-list"), loadSkills);
+				wireDeletes($("#skills-list"), loadSkills);
 				say(`${on}/${skillRows.length} skills enabled`);
 			}
 			async function loadSkills() {
@@ -525,11 +567,13 @@
 										].join(" "),
 										sub: r.target,
 										endpoint: "/api/mcp/toggle",
+										deleteEndpoint: "/api/mcp/delete",
 									}),
 								)
 								.join("")
 						: `<div class="empty">No MCP servers found in any discovered config.</div>`;
 					wireToggles($("#mcp-list"), loadMcp);
+					wireDeletes($("#mcp-list"), loadMcp);
 				} catch (e) {
 					say(e.message, "err");
 				}

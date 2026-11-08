@@ -4,7 +4,7 @@ import { $ } from "bun";
 import { Document, parse, parseDocument } from "yaml";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 
 const HOME = homedir();
 const CONFIG_YML = join(HOME, ".omp/agent/config.yml");
@@ -368,6 +368,22 @@ async function setSkillEnabled(name: string, enabled: boolean): Promise<void> {
 	await writeFile(CONFIG_YML, doc.toString(), "utf8");
 }
 
+/** Removes the skill's directory from disk, not just config - this is a
+ *  delete, not a hide. Also drops any stale `ignoredSkills` entry left
+ *  pointing at a name that no longer exists. */
+async function deleteSkill(name: string): Promise<void> {
+	const skill = (await listSkills()).find((s) => s.name === name);
+	if (!skill) throw new Error(`unknown skill ${name}`);
+	await rm(join(skill.dir, skill.name), { recursive: true, force: true });
+
+	const doc = parseDocument((await readFile(CONFIG_YML, "utf8").catch(() => "")) || "{}");
+	const ignored = new Set(configStringList(doc, "skills", "ignoredSkills"));
+	if (ignored.delete(name)) {
+		doc.setIn(["skills", "ignoredSkills"], [...ignored].sort());
+		await writeFile(CONFIG_YML, doc.toString(), "utf8");
+	}
+}
+
 // ---------------------------------------------------------------------- mcp
 
 /**
@@ -459,6 +475,37 @@ async function setMcpEnabled(name: string, enabled: boolean): Promise<void> {
 	await writeFile(MCP_JSON, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
 }
 
+/**
+ * Removes the server from every source file that defines it, not just the
+ * highest-precedence one - deleting only the winning definition would let
+ * a shadowed lower-precedence one quietly take its place afterward. JSON
+ * sources round-trip through JSON.stringify like `setMcpEnabled` already
+ * does; the one TOML source (codex) round-trips through Bun.TOML, which
+ * does not preserve comments the way `yaml`'s parseDocument does for
+ * config.yml, so a delete there may reformat the file.
+ */
+async function deleteMcp(name: string): Promise<void> {
+	let found = false;
+	for (const src of MCP_SOURCES) {
+		const cfg = await readConfigFile(src.path, src.toml);
+		const servers = asRecord(cfg[src.key]);
+		if (!servers || !(name in servers)) continue;
+		found = true;
+		delete servers[name];
+		const text = src.toml ? Bun.TOML.stringify(cfg) : `${JSON.stringify(cfg, null, 2)}\n`;
+		await writeFile(src.path, text, "utf8");
+	}
+	if (!found) throw new Error(`${name} not found in any MCP config`);
+
+	const denyCfg = await readConfigFile(MCP_JSON);
+	const disabled = new Set(asStringList(denyCfg.disabledServers));
+	if (disabled.delete(name)) {
+		denyCfg.disabledServers = [...disabled].sort();
+		await mkdir(dirname(MCP_JSON), { recursive: true });
+		await writeFile(MCP_JSON, `${JSON.stringify(denyCfg, null, 2)}\n`, "utf8");
+	}
+}
+
 // ------------------------------------------------------------------ routes
 
 const server = Bun.serve({
@@ -518,6 +565,14 @@ const server = Bun.serve({
 				}
 				if (path === "/api/skills/toggle") await setSkillEnabled(body.name, body.enabled);
 				else await setMcpEnabled(body.name, body.enabled);
+				return json({ ok: true });
+			}
+
+			if ((path === "/api/skills/delete" || path === "/api/mcp/delete") && req.method === "POST") {
+				const body = asRecord(await req.json()) ?? {};
+				if (typeof body.name !== "string") return json({ error: "name required" }, 400);
+				if (path === "/api/skills/delete") await deleteSkill(body.name);
+				else await deleteMcp(body.name);
 				return json({ ok: true });
 			}
 
