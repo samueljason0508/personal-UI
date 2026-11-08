@@ -1,0 +1,101 @@
+#!/bin/bash
+# omp-panel.app: start the panel server if it isn't already running, then
+# open it in a chrome-less "app mode" browser window instead of a normal
+# tab. No Electron, no terminal window - double-click and go. The
+# `omp-panel` script at the repo root is the terminal-based equivalent.
+set -euo pipefail
+
+APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"  # .../omp-panel.app/Contents/MacOS
+DIR="$(cd "$APP_DIR/../../.." && pwd)"                    # repo root: the bundle lives at its top level
+PORT="${OMP_PANEL_PORT:-8777}"
+URL="http://127.0.0.1:$PORT"
+LOG="${TMPDIR:-/tmp}/omp-panel.log"
+
+alert() { osascript -e "display alert \"omp-panel\" message \"$1\"" >/dev/null 2>&1 || true; }
+
+# GUI launches (double-click, Dock, Spotlight) get launchd's bare PATH, which
+# does not include Homebrew. Check the common install spots before giving up.
+BUN=""
+for candidate in /opt/homebrew/bin/bun /usr/local/bin/bun "$HOME/.bun/bin/bun"; do
+	[[ -x "$candidate" ]] && BUN="$candidate" && break
+done
+[[ -z "$BUN" ]] && BUN="$(command -v bun || true)"
+if [[ -z "$BUN" ]]; then
+	alert "bun is not installed (checked /opt/homebrew/bin, /usr/local/bin, ~/.bun/bin). Install it from bun.sh and try again."
+	exit 1
+fi
+
+health() { curl -fsS --max-time 2 "$URL/api/ports" >/dev/null 2>&1; }
+
+# A plain `cmd &` (or even `launchctl submit`) here still shares this
+# script's App Nap lifecycle - LaunchServices tears down everything under
+# it the moment this script exits, taking the server with it. A real
+# LaunchAgent plist in ~/Library/LaunchAgents, loaded with `bootstrap`, is
+# its own launchd job with no tie to our process tree: it outlives us, and
+# (since the plist stays on disk) launchd restarts it on every login too,
+# so later launches just open a window against an already-running server.
+LABEL="dev.omp.panel.server"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+DOMAIN="gui/$(id -u)"
+
+if ! health; then
+	mkdir -p "$HOME/Library/LaunchAgents"
+	cat >"$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>$LABEL</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>$BUN</string>
+		<string>$DIR/server.ts</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>OMP_PANEL_PORT</key>
+		<string>$PORT</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<false/>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>StandardOutPath</key>
+	<string>$LOG</string>
+	<key>StandardErrorPath</key>
+	<string>$LOG</string>
+</dict>
+</plist>
+EOF
+	launchctl bootout "$DOMAIN/$LABEL" >/dev/null 2>&1 || true
+	launchctl bootstrap "$DOMAIN" "$PLIST"
+	for _ in $(seq 1 40); do
+		health && break
+		sleep 0.25
+	done
+	if ! health; then
+		alert "omp-panel server failed to start. See $LOG."
+		exit 1
+	fi
+fi
+
+# Chromium-family browser in --app mode: a window with no tabs or address
+# bar, the closest thing to a native window without bundling Electron.
+# Launched via `open -na` (LaunchServices), not a direct exec, so it runs
+# as its own process under the GUI session rather than inheriting ours.
+for candidate in \
+	"/Applications/Google Chrome.app" \
+	"/Applications/Brave Browser.app" \
+	"/Applications/Microsoft Edge.app" \
+	"/Applications/Chromium.app"; do
+	if [[ -d "$candidate" ]]; then
+		open -na "$candidate" --args --app="$URL" --window-size=1180,860
+		exit 0
+	fi
+done
+
+# No Chromium-family browser installed: fall back to the default browser.
+open "$URL"

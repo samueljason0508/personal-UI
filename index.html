@@ -195,6 +195,7 @@
 			<div class="brand">omp<span>·</span>panel</div>
 			<nav>
 				<button data-tab="ports" class="active">Ports</button>
+				<button data-tab="apps">Apps</button>
 				<button data-tab="agents">AGENTS.md</button>
 				<button data-tab="skills">Skills</button>
 				<button data-tab="mcp">MCP</button>
@@ -211,6 +212,14 @@
 					<label class="toggle-wrap"><input type="checkbox" id="ports-auto" /> auto</label>
 				</div>
 				<div class="card" id="ports-list"></div>
+			</section>
+
+			<section class="panel" id="panel-apps">
+				<div class="toolbar">
+					<input type="search" id="app-filter" placeholder="Filter apps…" />
+					<button class="btn" id="apps-refresh">Refresh</button>
+				</div>
+				<div class="card" id="apps-list"></div>
 			</section>
 
 			<section class="panel" id="panel-agents">
@@ -379,7 +388,7 @@
 				}
 			});
 
-			// ---- shared toggle rows (skills + mcp)
+			// ---- shared toggle rows (apps + skills + mcp)
 			function toggleRow({ name, enabled, title, sub, endpoint, onDone }) {
 				return `
 					<div class="row">
@@ -412,6 +421,40 @@
 					});
 				}
 			}
+
+			// ---- apps
+			let appRows = [];
+			function renderApps() {
+				const q = $("#app-filter").value.trim().toLowerCase();
+				const rows = appRows.filter((r) => !q || `${r.name} ${r.path}`.toLowerCase().includes(q));
+				const on = appRows.filter((r) => r.running).length;
+				$("#apps-list").innerHTML = rows.length
+					? rows
+							.map((r) =>
+								toggleRow({
+									name: r.bundleId,
+									enabled: r.running,
+									title: `${esc(r.name)} ${r.running ? '<span class="pill on">running</span>' : ""}`,
+									sub: r.path,
+									endpoint: "/api/apps/toggle",
+								}),
+							)
+							.join("")
+					: `<div class="empty">No apps found.</div>`;
+				wireToggles($("#apps-list"), loadApps);
+				say(`${on}/${appRows.length} apps running`);
+			}
+			async function loadApps() {
+				try {
+					appRows = await api("/api/apps");
+					renderApps();
+				} catch (e) {
+					say(e.message, "err");
+				}
+			}
+			loaders.apps = loadApps;
+			$("#apps-refresh").addEventListener("click", loadApps);
+			$("#app-filter").addEventListener("input", renderApps);
 
 			// ---- skills
 			let skillRows = [];
