@@ -218,6 +218,7 @@
 				<div class="toolbar">
 					<input type="search" id="app-filter" placeholder="Filter projects…" />
 					<button class="btn" id="apps-refresh">Refresh</button>
+					<label class="toggle-wrap"><input type="checkbox" id="apps-auto" /> auto</label>
 				</div>
 				<div class="card" id="apps-list"></div>
 			</section>
@@ -455,6 +456,11 @@
 			loaders.apps = loadApps;
 			$("#apps-refresh").addEventListener("click", loadApps);
 			$("#app-filter").addEventListener("input", renderApps);
+			let appsAutoTimer;
+			$("#apps-auto").addEventListener("change", (e) => {
+				clearInterval(appsAutoTimer);
+				if (e.target.checked) appsAutoTimer = setInterval(loadApps, 3000);
+			});
 
 			// ---- skills
 			let skillRows = [];
