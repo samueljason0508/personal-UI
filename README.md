@@ -8,13 +8,22 @@ Bun server + one HTML file. No build step, no framework. Binds `127.0.0.1` only.
 
 ## Run
 
-**omp-panel.app** - double-click it (or drag it to the Dock). It starts the
-server if it isn't already running and opens the panel in its own
-chrome-less browser window (`--app=` mode: no tabs, no address bar), so it
-behaves like a native app with no terminal involved. The server itself runs
-as a `~/Library/LaunchAgents` LaunchAgent, independent of the app window's
-own lifecycle, so it also comes back up on login - later launches just open
-a window against an already-running server.
+**omp-panel.app** - lives in this repo but installs to `/Applications`
+like any other app, so Spotlight/Launchpad find it:
+
+```sh
+cp -R omp-panel.app /Applications/
+```
+
+Double-click it from there (or drag it to the Dock). It expects the repo
+at `~/git/personal-UI` (same convention as the CLI launcher below) and
+starts the server if it isn't already running, then opens the panel in
+its own chrome-less browser window (`--app=` mode: no tabs, no address
+bar), so it behaves like a native app with no terminal involved. The
+server itself runs as a `~/Library/LaunchAgents` LaunchAgent, independent
+of the app window's own lifecycle, so it also comes back up on login -
+later launches just open a window against an already-running server.
+Re-run the `cp -R` after editing the bundle to update the installed copy.
 
 For a terminal workflow instead:
 

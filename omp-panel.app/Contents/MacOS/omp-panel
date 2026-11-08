@@ -5,13 +5,17 @@
 # `omp-panel` script at the repo root is the terminal-based equivalent.
 set -euo pipefail
 
-APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"  # .../omp-panel.app/Contents/MacOS
-DIR="$(cd "$APP_DIR/../../.." && pwd)"                    # repo root: the bundle lives at its top level
+DIR="$HOME/git/personal-UI"  # same convention as the CLI launcher (`omp-panel`) at the repo root
 PORT="${OMP_PANEL_PORT:-8777}"
 URL="http://127.0.0.1:$PORT"
 LOG="${TMPDIR:-/tmp}/omp-panel.log"
 
 alert() { osascript -e "display alert \"omp-panel\" message \"$1\"" >/dev/null 2>&1 || true; }
+
+if [[ ! -f "$DIR/server.ts" ]]; then
+	alert "omp-panel: repo not found at $DIR. Clone personal-UI there, or edit this script's DIR."
+	exit 1
+fi
 
 # GUI launches (double-click, Dock, Spotlight) get launchd's bare PATH, which
 # does not include Homebrew. Check the common install spots before giving up.
